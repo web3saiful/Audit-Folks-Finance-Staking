@@ -30,12 +30,12 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
     // we assume ERC20 doesn't have any fee on transfer or rebasing logic
     IERC20 public immutable TOKEN;
 
-    uint256 public activeTotalStaked;
-    uint256 public activeTotalRewards;
+    uint256 public activeTotalStaked;//@audit-info সব user মিলে 50,000 token stake করেছে।
+    uint256 public activeTotalRewards;//@audit-info Contract এর pending reward obligation 5,000 token।
 
     StakingPeriod[] public stakingPeriods;
-    mapping(address user => UserStake[]) public userStakes;
-    mapping(address migrator => mapping(address user => bool isAuthorized)) public migrationPermits;
+    mapping(address user => UserStake[]) public userStakes;//@audit-info User এর 3টা stake আছে।
+    mapping(address migrator => mapping(address user => bool isAuthorized)) public migrationPermits;//@audit-info User V2 migrator contract কে approve করেছে।
 
     constructor(address _admin, address _manager, address _pauser, address _token)
         AccessControlDefaultAdminRules(1 days, _admin)
@@ -70,22 +70,22 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
     }
 
     // user allowed to withdraw when contract is paused
-    function withdraw(uint8 stakeIndex) external nonReentrant {
+    function withdraw(uint8 stakeIndex) external nonReentrant {//@audit-info Contract pause করলে নতুন stake/addition বন্ধ হয়, কিন্তু পুরানো stake exit করা যায়।
         _withdraw(stakeIndex);
     }
 
-    function setMigrationPermit(address _migrator, bool _isMigrationPermitted) external {
+    function setMigrationPermit(address _migrator, bool _isMigrationPermitted) external {//@audit-info ইউজারকে control দেয় তার staking position migrate করা যাবে কি না।
         if (!hasRole(MIGRATOR_ROLE, _migrator)) revert MigratorNotFound(_migrator);
 
         migrationPermits[_migrator][msg.sender] = _isMigrationPermitted;
         emit MigrationPermitUpdated(_migrator, msg.sender, _isMigrationPermitted);
     }
-
-    function addStakingPeriod(
-        uint256 _cap,
-        uint64 _stakingDurationSeconds,
-        uint64 _unlockDurationSeconds,
-        uint32 _aprBps,
+  
+    function addStakingPeriod(//@audit-info “This function allows the manager/admin to create
+        uint256 _cap,//@audit-info 10_000
+        uint64 _stakingDurationSeconds,//@audit-info 30 * 24 * 60 * 60  // 30 days
+        uint64 _unlockDurationSeconds,//@audit-info  10 * 24 * 60 * 60   // 10 days linear unlock
+        uint32 _aprBps,//@audit-info 10% APR
         bool _isActive
     ) external onlyRole(MANAGER_ROLE) returns (uint8) {
         if (_stakingDurationSeconds == 0) revert StakingDurationCannotBeZero();
@@ -97,7 +97,7 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
         stakingPeriods.push(
             StakingPeriod({
                 cap: _cap,
-                capUsed: 0,
+                capUsed: 0,//@audit-info initially no one has staked yet.
                 stakingDurationSeconds: _stakingDurationSeconds,
                 unlockDurationSeconds: _unlockDurationSeconds,
                 aprBps: _aprBps,
@@ -110,7 +110,7 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
     }
 
     function updateStakingPeriod(
-        uint8 periodIndex,
+        uint8 periodIndex,//@audit-info periodIndex = 0
         uint256 _cap,
         uint64 _stakingDurationSeconds,
         uint64 _unlockDurationSeconds,
