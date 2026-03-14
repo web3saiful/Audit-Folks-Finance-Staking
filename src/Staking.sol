@@ -33,8 +33,8 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
     uint256 public activeTotalStaked;//@audit-info সব user মিলে 50,000 token stake করেছে।
     uint256 public activeTotalRewards;//@audit-info Contract এর pending reward obligation 5,000 token।
 
-    StakingPeriod[] public stakingPeriods;
-    mapping(address user => UserStake[]) public userStakes;//@audit-info User এর 3টা stake আছে।
+    StakingPeriod[] public stakingPeriods;  //@audit-info get specific staking pool information
+    mapping(address user => UserStake[]) public userStakes;//@audit-info User এর 3টা stake আছে। stacke 0, stake 1, stake 2
     mapping(address migrator => mapping(address user => bool isAuthorized)) public migrationPermits;//@audit-info User V2 migrator contract কে approve করেছে।
 
     constructor(address _admin, address _manager, address _pauser, address _token)
@@ -45,7 +45,8 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
         _grantRole(PAUSER_ROLE, _pauser);
     }
 
-    function stake(uint8 periodIndex, uint256 amount, StakeParams calldata params)
+    function stake(uint8 periodIndex, uint256 amount, StakeParams calldata params)//@audit-info  uint64 maxStakingDurationSeconds; ,, uint64 maxUnlockDurationSeconds; ,, uint32 minAprBps;
+    address referrer;
         external
         nonReentrant
         whenNotPaused
@@ -82,7 +83,7 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
     }
   
     function addStakingPeriod(//@audit-info “This function allows the manager/admin to create
-        uint256 _cap,//@audit-info 10_000
+        uint256 _cap,//@audit-info 10_000 capacity
         uint64 _stakingDurationSeconds,//@audit-info 30 * 24 * 60 * 60  // 30 days
         uint64 _unlockDurationSeconds,//@audit-info  10 * 24 * 60 * 60   // 10 days linear unlock
         uint32 _aprBps,//@audit-info 10% APR
@@ -152,11 +153,11 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
             uint256 requiredBalance = activeTotalStaked + activeTotalRewards;
             uint256 contractTokenBalance = TOKEN.balanceOf(address(this));
             if (contractTokenBalance < requiredBalance + tokenAmount) {
-                // invariant contractTokenBalance >= requiredBalance so can't underflow
+                // invariant contractTokenBalance >= requiredBalance so can't underflow //@audit-issue 
                 revert NotEnoughBalanceToRecover(tokenAddress, tokenAmount, contractTokenBalance - requiredBalance);
             }
         }
-        IERC20(tokenAddress).safeTransfer(msg.sender, tokenAmount);
+        IERC20(tokenAddress).safeTransfer(msg.sender, tokenAmount);//@audit-issue What if multiple users send the tokens That time the will handle it and you cover and back to the US
         emit Recovered(tokenAddress, tokenAmount);
     }
 
@@ -169,60 +170,62 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
         onlyRole(MIGRATOR_ROLE)
         returns (UserStake[] memory)
     {
-        if (!migrationPermits[msg.sender][user]) revert MigratorNotPermitted(msg.sender, user);
+        if (!migrationPermits[msg.sender][user]) revert MigratorNotPermitted(msg.sender, user);//@audit-issue where is the bool
 
         UserStake[] memory stakes = userStakes[user];
 
-        uint256 stakesToMigrateCount;
+        uint256 stakesToMigrateCount;  //@audit-info এখানে কোনো stake store হয়নি। শুধু number গণনা হয়েছে 2
         // Count migratedStakes array size
         for (uint256 i = 0; i < stakes.length; i++) {
-            if (stakes[i].claimedAmount + stakes[i].claimedReward < stakes[i].amount + stakes[i].reward) {
-                stakesToMigrateCount++;
+            if (stakes[i].claimedAmount + stakes[i].claimedReward < stakes[i].amount + stakes[i].reward) {//@audit-info  if (claimed < total), যদি stake fully claimed না হয় তাহলে migrate হবে। ,0 < 1008 → TRUE , 504 < 504 → FALSE, 101 < 302 → TRUE , 
+                stakesToMigrateCount++;  //@audit-info Stake 0 ,Stake 2 ;Count = 2
             }
         }
-        UserStake[] memory migratedStakes = new UserStake[](stakesToMigrateCount);
-        delete userStakes[user];
+                                       //@audit-info size of anrray⤵️
+        UserStake[] memory migratedStakes = new UserStake[](stakesToMigrateCount);  //@audit-info migratedStakes size = 2 ,,নতুন array (যেখানে migrate হওয়া stakes রাখা হবে),, After two array will store
+        delete userStakes[user];//@audit-info পুরো storage array খালি।
 
-        uint256 migratedCount;
-        uint256 unclaimedUserAmount;
-        uint256 unclaimedUserRewards;
+        uint256 migratedCount;  //@audit-info migratedStakes array এর index track করবে
+        uint256 unclaimedUserAmount;  //@audit-info user এর unclaimed principal হিসাব
+        uint256 unclaimedUserRewards;  //@audit-info user এর unclaimed reward হিসাব
         for (uint256 i = 0; i < stakes.length; i++) {
-            if (stakes[i].claimedAmount + stakes[i].claimedReward >= stakes[i].amount + stakes[i].reward) {
+            if (stakes[i].claimedAmount + stakes[i].claimedReward >= stakes[i].amount + stakes[i].reward) {  //@audit-info  migrate করো না,storage এ রেখে de
                 userStakes[user].push(stakes[i]);
                 continue;
             }
-            unclaimedUserAmount += stakes[i].amount - stakes[i].claimedAmount;
-            unclaimedUserRewards += stakes[i].reward - stakes[i].claimedReward;
-
-            migratedStakes[migratedCount] = stakes[i];
+            
+            unclaimedUserAmount += stakes[i].amount - stakes[i].claimedAmount;   //@audit-info cholbe when claimed < total   //@audit-info 1000 - 400 = 600
+            unclaimedUserRewards += stakes[i].reward - stakes[i].claimedReward;   //@audit-info 8 - 2 = 6
+             //! Jante hobe
+            migratedStakes[migratedCount] = stakes[i];  //@audit-info Storing the stake[i] to migratedCount index of migratedStakes array. migratedStakes[0] = stakes[0],  [Stake0, Stake2]
             migratedCount++;
         }
 
         // The capUsed is intentionally not decremented for migrated positions. Migration is a terminal operation:
         // the manager will deactivate all staking periods or pauser will pause the contract before migration begins
-        activeTotalStaked -= unclaimedUserAmount;
-        activeTotalRewards -= unclaimedUserRewards;
+        activeTotalStaked -= unclaimedUserAmount;  //@audit-info activeTotalStaked = 10000,, unclaimedUserAmount = 600 ,,activeTotalStaked = 9400
+        activeTotalRewards -= unclaimedUserRewards;  //@audit-info activeTotalRewards = 500 ,,unclaimedUserRewards = 6 ,, activeTotalRewards = 494
 
-        TOKEN.safeTransfer(msg.sender, unclaimedUserAmount + unclaimedUserRewards);
+        TOKEN.safeTransfer(msg.sender, unclaimedUserAmount + unclaimedUserRewards);   //@audit-info 600 + 6 = 606 tokens
 
-        emit MigrateFrom(msg.sender, user);
+        emit MigrateFrom(msg.sender, user);  //@audit-info migrator = msg.sender
         return migratedStakes;
     }
 
-    function getStakingPeriods() external view returns (StakingPeriod[] memory) {
+    function getStakingPeriods() external view returns (StakingPeriod[] memory) {  //@audit-info Return all staking pools
         return stakingPeriods;
     }
 
-    function getStakingPeriod(uint8 periodIndex) external view returns (StakingPeriod memory) {
+    function getStakingPeriod(uint8 periodIndex) external view returns (StakingPeriod memory) {//@audit-info Specific staking pool information
         if (periodIndex >= stakingPeriods.length) revert PeriodNotFound();
         return stakingPeriods[periodIndex];
     }
 
-    function getUserStakes(address user) external view returns (UserStake[] memory) {
+    function getUserStakes(address user) external view returns (UserStake[] memory) {//@audit-info Specific staking pool information return করা
         return userStakes[user];
     }
 
-    function getUserStake(address user, uint8 stakeIndex) external view returns (UserStake memory) {
+    function getUserStake(address user, uint8 stakeIndex) external view returns (UserStake memory) {//@audit-info Return a specific stake of a user
         if (stakeIndex >= userStakes[user].length) revert StakeNotFound();
         return userStakes[user][stakeIndex];
     }
@@ -235,55 +238,64 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
         returns (bool)
     {
         return interfaceId == type(IMigratorV1).interfaceId || interfaceId == type(IStakingV1).interfaceId
-            || super.supportsInterface(interfaceId);
+            || super.supportsInterface(interfaceId);  //@audit-info Parent contract এর interfaces check করো
     }
 
-    function _stake(uint8 periodIndex, uint256 amount, StakeParams calldata params) internal returns (uint8) {
+    function _stake(uint8 periodIndex, uint256 amount, StakeParams calldata params) internal returns (uint8) {  //@audit-info amount = 1,000
         if (amount == 0) revert CannotStakeZero();
         if (periodIndex >= stakingPeriods.length) revert PeriodNotFound();
 
-        StakingPeriod storage stakingPeriod = stakingPeriods[periodIndex];
-        if (!stakingPeriod.isActive) revert StakingPeriodInactive(periodIndex);
+        StakingPeriod storage stakingPeriod = stakingPeriods[periodIndex];  //@audit-info এখানে specific staking period load করছে।
+        if (!stakingPeriod.isActive) revert StakingPeriodInactive(periodIndex);  //@audit-info staking period active হতে হবে
 
+/*  //@audit-info User says:
+
+     APR >= 10%
+     staking duration <= 30 days
+     unlock <= 7 days ⤵️*/
         // ensuring that staking period conditions were not updated in front of this operation
-        if (stakingPeriod.stakingDurationSeconds > params.maxStakingDurationSeconds) {
+        if (stakingPeriod.stakingDurationSeconds > params.maxStakingDurationSeconds) {  //@audit-info কিন্তু transaction confirm হওয়ার আগে manager update করলো: ,, 90 > 30  → TRUE
             revert StakingPeriodStakingDurationDiffer(
                 periodIndex, params.maxStakingDurationSeconds, stakingPeriod.stakingDurationSeconds
             );
         }
-        if (stakingPeriod.unlockDurationSeconds > params.maxUnlockDurationSeconds) {
+        if (stakingPeriod.unlockDurationSeconds > params.maxUnlockDurationSeconds) {  //@audit-info Manager update করলো:,, unlockDuration = 30 days ,,30 > 7
             revert StakingPeriodUnlockDurationDiffer(
                 periodIndex, params.maxUnlockDurationSeconds, stakingPeriod.unlockDurationSeconds
             );
         }
-        if (stakingPeriod.aprBps < params.minAprBps) {
+        if (stakingPeriod.aprBps < params.minAprBps) {  //@audit-info Manager update করলো:,,APR = 5%,, 500 < 1000
             revert StakingPeriodAprDiffer(periodIndex, params.minAprBps, stakingPeriod.aprBps);
         }
 
-        uint256 updatedCapUsed = stakingPeriod.capUsed + amount;
-        if (stakingPeriod.cap < updatedCapUsed) revert StakingCapReached(stakingPeriod.cap);
-        if (userStakes[msg.sender].length >= MAX_STAKES_PER_USER) revert MaxUserStakesReached(MAX_STAKES_PER_USER);
+        uint256 updatedCapUsed = stakingPeriod.capUsed + amount;  //@audit-info updatedCapUsed = 6000 + 1000,, updatedCapUsed = 7000
+        if (stakingPeriod.cap < updatedCapUsed) revert StakingCapReached(stakingPeriod.cap);//@audit-info 10000 < 7000 ❌ false
+        if (userStakes[msg.sender].length >= MAX_STAKES_PER_USER) revert MaxUserStakesReached(MAX_STAKES_PER_USER);   //@audit-info একজন user সর্বোচ্চ 100 stakes রাখতে পারবে।
 
         uint256 rewardBpsDenominator = 1e4 * 365 days;
-        uint256 reward = (amount * stakingPeriod.aprBps * stakingPeriod.stakingDurationSeconds) / rewardBpsDenominator;
+        uint256 reward = (amount * stakingPeriod.aprBps * stakingPeriod.stakingDurationSeconds) / rewardBpsDenominator;/*@audit-info reward = 1000 × 1000 × 30                                 
+                                                                                                                                        
+                                                                                                                                              ----------------
+                                                                                                                                                 10000 × 365       = 82.19 token */
+
         uint256 contractBalance = TOKEN.balanceOf(address(this));
-        uint256 requiredBalance = activeTotalStaked + activeTotalRewards + reward;
+        uint256 requiredBalance = activeTotalStaked + activeTotalRewards + reward;  //@audit-info requiredBalance = 10000 + 250 + 8 ,, requiredBalance = 10258
         // ensure that smart-contract balance is enough to pay reward
-        if (requiredBalance > contractBalance) {
+        if (requiredBalance > contractBalance) {   //@audit-info 10258 > 11000 ❌ false
             revert NotEnoughContractBalance(address(TOKEN), contractBalance, requiredBalance);
         }
 
-        activeTotalStaked += amount;
-        activeTotalRewards += reward;
-        stakingPeriod.capUsed = updatedCapUsed;
+        activeTotalStaked += amount;  //@audit-info activeTotalStaked = 10,000 + 1,000 ,, activeTotalStaked = 11,000
+        activeTotalRewards += reward;//@audit-info activeTotalRewards = 500 + 8 ,, activeTotalRewards = 508
+        stakingPeriod.capUsed = updatedCapUsed;  //@audit-info capUsed = 6000 + 1000 ,, capUsed = 7000
 
         uint8 stakeIndex = uint8(userStakes[msg.sender].length);
         userStakes[msg.sender].push(
             UserStake({
-                amount: amount,
-                reward: reward,
-                claimedAmount: 0,
-                claimedReward: 0,
+                amount: amount,      //@audit-info amount = 1000
+                reward: reward,      //@audit-info reward = 8 tokens
+                claimedAmount: 0,    //@audit-info  claimedAmount: 0
+                claimedReward: 0,    //@audit-info claimedAmount = 500
                 aprBps: stakingPeriod.aprBps,
                 stakeTime: uint64(block.timestamp),
                 unlockTime: uint64(block.timestamp) + stakingPeriod.stakingDurationSeconds,
@@ -297,18 +309,18 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
     }
 
     /**
-     *     @notice withdraw linear unlock mechanism
+     *             @notice withdraw linear unlock mechanism
      *             staked amount and reward accrued linearly during unlock period
      *             user can withdraw multiple times
      */
     function _withdraw(uint8 stakeIndex) internal {
-        if (stakeIndex >= userStakes[msg.sender].length) revert StakeNotFound();
+        if (stakeIndex >= userStakes[msg.sender].length) revert StakeNotFound();  //@audit-info msg.sender = the caller of the function.,,userStakes[msg.sender] → array of this user’s stakes.,, Check if the stakeIndex exists.
 
-        UserStake storage userStake = userStakes[msg.sender][stakeIndex];
-        if (block.timestamp <= userStake.unlockTime) {
+        UserStake storage userStake = userStakes[msg.sender][stakeIndex];  //@audit-info Load the specific stake struct for this user.
+        if (block.timestamp <= userStake.unlockTime) {   //@audit-info stakeTime + stakingDuration (from _stake()).,,User cannot withdraw before unlockTime.
             revert RewardsNotAvailableYet(uint64(block.timestamp), userStake.unlockTime);
         }
-        if (userStake.claimedAmount + userStake.claimedReward >= userStake.amount + userStake.reward) {
+        if (userStake.claimedAmount + userStake.claimedReward >= userStake.amount + userStake.reward) {   //@audit-info claimedAmount + claimedReward = 110,, amount + reward = 110
             revert AlreadyWithdrawn(stakeIndex);
         }
 
@@ -328,8 +340,9 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
         emit Withdrawn(msg.sender, stakeIndex, amountToClaim, rewardToClaim);
         TOKEN.safeTransfer(msg.sender, amountToClaim + rewardToClaim);
     }
-
+        //@audit-info Linearly grow unlock function
     function _getAccrued(uint256 amount, uint256 duration, uint256 elapsed) internal pure returns (uint256) {
-        return Math.mulDiv(amount, Math.min(elapsed, duration), duration);
+        return Math.mulDiv(amount, Math.min(elapsed, duration), duration);  //@audit-info 1000 × 3 / 10 = 300 tokens unlocked
     }
+    
 }

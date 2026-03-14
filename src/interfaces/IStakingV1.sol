@@ -6,8 +6,8 @@ import {IERC20} from "openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC
 
 interface IStakingV1 {
     struct StakingPeriod {
-        uint256 cap;
-        uint256 capUsed;
+        uint256 cap;  //@audit-info 10,000
+        uint256 capUsed;  //@audit-info 6000 
         uint64 stakingDurationSeconds;
         uint64 unlockDurationSeconds;
         uint32 aprBps; // APR (365 days = 31536000 seconds) in bps. E.g. 1000 = 10%, 550 = 5.5%
