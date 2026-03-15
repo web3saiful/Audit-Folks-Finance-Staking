@@ -143,7 +143,7 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
         _unpause();
     }
 
-    /**
+    /**        
      *     @dev manager allowed to recover full amount of any ERC20 token accidentally sent to staking contract
      *          except staking token itself. In case of staking token - manager allowed to recover only
      *          extra amount (which is not supposed to be distributed to users)
@@ -313,7 +313,8 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
      *             staked amount and reward accrued linearly during unlock period
      *             user can withdraw multiple times
      */
-    function _withdraw(uint8 stakeIndex) internal {
+    function _withdraw(uint8 stakeIndex) internal {  //@audit-ok  Fractional rounding
+
         if (stakeIndex >= userStakes[msg.sender].length) revert StakeNotFound();  //@audit-info msg.sender = the caller of the function.,,userStakes[msg.sender] → array of this user’s stakes.,, Check if the stakeIndex exists.
 
         UserStake storage userStake = userStakes[msg.sender][stakeIndex];  //@audit-info Load the specific stake struct for this user.
@@ -325,24 +326,32 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
         }
 
         uint256 accruedAmount =
-            _getAccrued(userStake.amount, userStake.unlockDuration, block.timestamp - userStake.unlockTime);
+            _getAccrued(userStake.amount, userStake.unlockDuration, block.timestamp - userStake.unlockTime);  //@audit-info accruedAmount = _getAccrued(1000, 10, 3) = 1000 * 3 / 10 = 300
         uint256 accruedReward =
-            _getAccrued(userStake.reward, userStake.unlockDuration, block.timestamp - userStake.unlockTime);
+            _getAccrued(userStake.reward, userStake.unlockDuration, block.timestamp - userStake.unlockTime);  //@audit-info accruedReward = _getAccrued(8, 10, 3) = 8 * 3 / 10 ≈ 2.4 ≈ 2 tokens
 
-        uint256 amountToClaim = accruedAmount - userStake.claimedAmount;
-        uint256 rewardToClaim = accruedReward - userStake.claimedReward;
+        uint256 amountToClaim = accruedAmount - userStake.claimedAmount;  //@audit-info  300 - 0 = 300
+        uint256 rewardToClaim = accruedReward - userStake.claimedReward;   //@audit-info 2 - 0 = 2
+              /*@audit-info activeTotalStaked = 11,000
+activeTotalRewards = 508
+userStake.amount = 1000
+userStake.reward = 8
+userStake.claimedAmount = 0
+userStake.claimedReward = 0
+amountToClaim = 300
+rewardToClaim = 2*/
 
-        activeTotalStaked -= amountToClaim;
-        activeTotalRewards -= rewardToClaim;
-        userStake.claimedAmount += amountToClaim;
-        userStake.claimedReward += rewardToClaim;
+        activeTotalStaked -= amountToClaim;  //@audit-info 11,000 - 300 = 10,700
+        activeTotalRewards -= rewardToClaim;  //@audit-info  508 - 2 = 506
+        userStake.claimedAmount += amountToClaim;  //@audit-info  0 + 300 = 300
+        userStake.claimedReward += rewardToClaim;  //@audit-info 0 + 2 = 2
 
-        emit Withdrawn(msg.sender, stakeIndex, amountToClaim, rewardToClaim);
-        TOKEN.safeTransfer(msg.sender, amountToClaim + rewardToClaim);
+        emit Withdrawn(msg.sender, stakeIndex, amountToClaim, rewardToClaim);  //@audit-info  300, 2
+        TOKEN.safeTransfer(msg.sender, amountToClaim + rewardToClaim);  //@audit-info sends tokens to the user. ,,300 + 2 = 302 tokens
     }
         //@audit-info Linearly grow unlock function
     function _getAccrued(uint256 amount, uint256 duration, uint256 elapsed) internal pure returns (uint256) {
         return Math.mulDiv(amount, Math.min(elapsed, duration), duration);  //@audit-info 1000 × 3 / 10 = 300 tokens unlocked
-    }
+    }  //@audit-info Why min is critical,, Without min,, 1000 × 11 / 10 = 1100  ,,User extra token পেত।
     
 }
