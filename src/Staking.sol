@@ -55,6 +55,7 @@ contract Staking is IMigratorV1, Pausable, ReentrancyGuard, AccessControlDefault
         return _stake(periodIndex, amount, params);
     }
 
+
     function stakeWithPermit(
         uint8 periodIndex,
         uint256 amount,
